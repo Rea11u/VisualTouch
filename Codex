@@ -1,13 +1,16 @@
 import cv2
 import numpy as np
-from google.colab.patches import cv2_imshow
+import time
+import concurrent.futures
 
+
+# Чтение видео
 def video_import(path):
     cap = cv2.VideoCapture(path)
     img_list = []
-    while(cap.isOpened()):
+    while cap.isOpened():
         ret, frame = cap.read()
-        if (isinstance(frame, np.ndarray)):
+        if isinstance(frame, np.ndarray):
             img_list.append(frame)
         else:
             print('Видео считано')
@@ -15,45 +18,29 @@ def video_import(path):
     cap.release()
     return img_list
 
+
+# Обработка видео через color_noise и исправляем цветовые каналы
+diffGreen = 0
+diffBlue = 0
+diffRed = 0
+
 def color_noise(image):
-    #оценка общего уровня шума
-    blured_img = cv2.blur(image, (3,3))
-    threshHld = 127
+    start = time.time()
+    blured_img = cv2.blur(image, (3, 3))
     gray_orig = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     gray_blured = cv2.cvtColor(blured_img, cv2.COLOR_BGR2GRAY)
 
-    (thrash, bin_orig) = cv2.threshold(gray_orig, threshHld, 255, cv2.THRESH_BINARY)
-    (thrash, bin_blured) = cv2.threshold(gray_blured, threshHld, 255, cv2.THRESH_BINARY)
+    bin_orig = cv2.adaptiveThreshold(gray_orig, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
+    bin_blured = cv2.adaptiveThreshold(gray_blured, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
 
-    difference = cv2.bitwise_xor(bin_orig, bin_blured, mask = None)
+    difference = cv2.bitwise_xor(bin_orig, bin_blured, mask=None)
     nonZero = cv2.countNonZero(difference)
-    # найдем общий размер картинки (ее площадь) в пикселях
-    allPixels = bin_orig.shape[0]*bin_orig.shape[1]
-    # найдем процент шума на картинке
-    noise = nonZero/allPixels*100
+    allPixels = bin_orig.shape[0] * bin_orig.shape[1]
+    noise = nonZero / allPixels * 100
 
-    #поиск самого шумного канала
-    green_image = np.zeros(image.shape)
-    green_channel = image[:,:,1]
-    green_image[:,:,1] = green_channel
-
-    blue_image = np.zeros(image.shape)
-    blue_channel = image[:,:,0]
-    blue_image[:,:,0] = blue_channel
-
-    red_image = np.zeros(image.shape)
-    red_channel = image[:,:,2]
-    red_image[:,:,2] = red_channel
-
-    gray_orig = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    (_, bin_orig) = cv2.threshold(gray_orig, threshHld, 255, cv2.THRESH_BINARY)
-    (_, bin_green) = cv2.threshold(green_channel, threshHld, 255, cv2.THRESH_BINARY)
-    (_, bin_blue) = cv2.threshold(blue_channel, threshHld, 255, cv2.THRESH_BINARY)
-    (_, bin_red) = cv2.threshold(red_channel, threshHld, 255, cv2.THRESH_BINARY)
-
-    diffGreen = cv2.bitwise_xor(bin_green, bin_blured)
-    diffBlue = cv2.bitwise_xor(bin_blue, bin_blured)
-    diffRed = cv2.bitwise_xor(bin_red, bin_blured)
+    red_noise(image.copy(), bin_blured)
+    green_noise(image.copy(), bin_blured)
+    blue_noise(image.copy(), bin_blured)
 
     nonZeroGreen = cv2.countNonZero(diffGreen)
     nonZeroBlue = cv2.countNonZero(diffBlue)
@@ -69,89 +56,147 @@ def color_noise(image):
     else:
         channel = 'red'
 
-    return [channel, noise]
+    finishCN = time.time()
+    print("время color_noise", finishCN - start)
+    return ([channel, noise], finishCN - start)
 
-  #!!!!!!!!!!!! НАСТРОИТЬ!!!!!!!!!!!!!!
-def morph_transform(noise, channel, image):
 
-    threshHld = 127
-    transformed_image = image
-    #выбор ядра в зависимости от шума
-    if noise <= 10:
-        kernel = np.ones((2,2),np.uint8)
-    if ((noise > 10) and (noise <= 20)):
-        kernel = np.ones((3,3),np.uint8)
-    if noise > 20:
-        kernel = np.ones((4,4),np.uint8)
+# Функция выделения шума в цветовом канале изображения
+def red_noise(image, bin_blrd):
+    red_channel = image[:, :, 2]
+    bin_red = cv2.adaptiveThreshold(red_channel, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
+    global diffRed
+    diffRed = cv2.bitwise_xor(bin_red, bin_blrd)
 
-    #корекция цветового канала
-    if channel == 'red':
-        red_channel = image[:,:,2]
-        (_, bin_red) = cv2.threshold(red_channel, threshHld, 255, cv2.THRESH_BINARY)
-        morphDilate = cv2.dilate(bin_red, kernel, iterations = 1)
-        transformed_image[:,:,2] = morphDilate
-    if channel == 'green':
-        green_channel = image[:,:,1]
-        (_, bin_green) = cv2.threshold(green_channel, threshHld, 255, cv2.THRESH_BINARY)
-        morphDilate = cv2.dilate(bin_green, kernel, iterations = 1)
-        transformed_image[:,:,1] = morphDilate
-    if channel == 'blue':
-        blue_channel = image[:,:,0]
-        (_, bin_blue) = cv2.threshold(blue_channel, threshHld, 255, cv2.THRESH_BINARY)
-        morphDilate = cv2.dilate(bin_blue, kernel, iterations = 1)
-        transformed_image[:,:,0] = morphDilate
 
-    return(transformed_image)
-      
+def green_noise(image, bin_blrd):
+    green_channel = image[:, :, 1]
+    bin_green = cv2.adaptiveThreshold(green_channel, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
+    global diffGreen
+    diffGreen = cv2.bitwise_xor(bin_green, bin_blrd)
+
+
+def blue_noise(image, bin_blrd):
+    blue_channel = image[:, :, 0]
+    bin_blue = cv2.adaptiveThreshold(blue_channel, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
+    global diffBlue
+    diffBlue = cv2.bitwise_xor(bin_blue, bin_blrd)
+
+
+# Функция по очищению шума с помощью морфологий
+def morph_transform(noise, image):
+    start = time.time()
+    if image.shape[0] * image.shape[1] > 500 * 500:
+        if noise <= 10:
+            kernel = np.ones((2, 2), np.uint8)
+            iter = 1
+        elif 10 < noise <= 20:
+            kernel = npones((3, 3), np.uint8)
+            iter = 2
+        else:
+            kernel = np.ones((2, 2), np.uint8)
+            iter = 1
+
+        red_channel = image[:, :, 2]
+        green_channel = image[:, :, 1]
+        blue_channel = image[:, :, 0]
+
+        dilation_red = cv2.dilate(red_channel, kernel, iterations=iter)
+        dilation_green = cv2.dilate(green_channel, kernel, iterations=iter)
+        dilation_blue = cv2.dilate(blue_channel, kernel, iterations=iter)
+
+        erosion_red = cv2.erode(dilation_red, kernel, iterations=1)
+        erosion_green = cv2.erode(dilation_green, kernel, iterations=1)
+        erosion_blue = cv2.erode(dilation_blue, kernel, iterations=1)
+
+        transformed_image = image.copy()
+        transformed_image[:, :, 2] = erosion_red
+        transformed_image[:, :, 1] = erosion_green
+        transformed_image[:, :, 0] = erosion_blue
+    else:
+        transformed_image = image
+    finishMT = time.time()
+    print("время morph_transform", finishMT - start)
+    return transformed_image, finishMT - start
+
+
+# Функция убирает шум с помощью гауссового размытия
 def gaussian_transform(noise, channel, image):
+    start = time.time()
+    transformed_image = image.copy()
 
-    threshHld = 127
-    transformed_image = image
-    #выбор ядра в зависимости от шума
+    size_param = 0 if image.shape[0] * image.shape[1] > 500 * 500 else 4
+
     if noise <= 10:
         rep = 1
-    if ((noise > 10) and (noise <= 20)):
+        size = 9 - size_param
+    elif 10 < noise <= 20:
         rep = 2
-    if noise > 20:
+        size = 11 - size_param
+    else:
         rep = 3
+        size = 13 - size_param
 
-    #корекция цветового канала
     if channel == 'red':
-        red_channel = image[:,:,2]
-        gaussian_blur = cv2.GaussianBlur(red_channel, (11, 11), rep)
-        transformed_image[:,:,2] = gaussian_blur
-    if channel == 'green':
-        green_channel = image[:,:,1]
-        gaussian_blur = cv2.GaussianBlur(green_channel, (11, 11), rep)
-        transformed_image[:,:,1] = gaussian_blur
-    if channel == 'blue':
-        blue_channel = image[:,:,0]
-        gaussian_blur = cv2.GaussianBlur(blue_channel, (11, 11), rep)
-        transformed_image[:,:,0] = gaussian_blur
+        red_channel = image[:, :, 2]
+        gaussian_blur = cv2.GaussianBlur(red_channel, (size, size), rep)
+        transformed_image[:, :, 2] = gaussian_blur
+    elif channel == 'green':
+        green_channel = image[:, :, 1]
+        gaussian_blur = cv2.GaussianBlur(green_channel, (size, size), rep)
+        transformed_image[:, :, 1] = gaussian_blur
+    elif channel == 'blue':
+        blue_channel = image[:, :, 0]
+        gaussian_blur = cv2.GaussianBlur(blue_channel, (size, size), rep)
+        transformed_image[:, :, 0] = gaussian_blur
 
-    return(transformed_image)
+    finishGT = time.time()
+    print("время gaussian_transform", finishGT - start)
+    return transformed_image, finishGT - start
 
-def create_video(path, name, image_list):
+
+def check_file_exists(path):
+    try:
+        with open(path, 'r'):
+            pass
+    except FileNotFoundError:
+        print("Файл не найден.")
+        return False
+    return True
+
+
+def create_video(output_path, image_list):
+    if not image_list:
+        print("Список изображений пуст. Невозможно создать видео.")
+        return
+
     width = image_list[0].shape[1]
     height = image_list[0].shape[0]
 
-    out = cv2.VideoWriter(path+'/'+name, cv2.VideoWriter_fourcc(*'DIVX'), 30, (width, height))
+    out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'DIVX'), 30, (width, height))
 
     for image in image_list:
         out.write(image)
     out.release()
-    print('Видео сохранено')
+    print('Видео сохранено по пути:', output_path)
 
-#считали видео
-test_list = video_import('/content/Y2mate_mx_помидор_крутится_под_аристократическую_музыку_18_го_века.mp4')
-#список для обработанных кадров
-remastered_list = []
-#покадровая обработка
-for kadr in test_list:
-    [ch, ns] = color_noise(kadr)
-    remImg = gaussian_transform(ns, ch, kadr)
-    remastered_list.append(remImg)
-#создание нового обработанного видео
-create_video('/content', 'remaster.mp4', test_list)
 
-#https://colab.research.google.com/drive/1CILRmcF4H6PlpejYHxy9OygD-rLq1ji_?usp=sharing#scrollTo=mloRvdOiH2dn
+def process_frame(frame):
+    noise_info, _ = color_noise(frame)
+    morph_transformed, _ = morph_transform(noise_info[1], frame)
+    final_frame, _ = gaussian_transform(noise_info[1], noise_info[0], morph_transformed)
+    return final_frame
+
+
+# Пример использования
+video_path = r"C:\Users\Really\Desktop\Auth2.mp4"
+output_path = r"C:\Users\Really\Desktop\ResultVideo\Result
+
+video_frames = video_import(video_path)
+
+start_time = time.time()
+with concurrent.futures.ThreadPoolExecutor() as executor:
+    processed_frames = list(executor.map(process_frame, video_frames))
+
+create_video(output_path, processed_frames)
+print("Время выполнения:", time.time() - start_time)
